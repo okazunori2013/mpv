@@ -1923,7 +1923,9 @@ int vo_wayland_reconfig(struct vo *vo)
     }
 
     set_geometry(wl);
-    wl->window_size = wl->vdparams;
+
+    if (wl->vo_opts->auto_window_resize)
+        wl->window_size = wl->vdparams;
 
     if (wl->opts->configure_bounds)
         set_window_bounds(wl);
