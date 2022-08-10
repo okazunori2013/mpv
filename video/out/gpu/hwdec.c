@@ -38,6 +38,7 @@ extern const struct ra_hwdec_driver ra_hwdec_dxva2dxgi;
 extern const struct ra_hwdec_driver ra_hwdec_cuda;
 extern const struct ra_hwdec_driver ra_hwdec_cuda_nvdec;
 extern const struct ra_hwdec_driver ra_hwdec_rpi_overlay;
+extern const struct ra_hwdec_driver ra_hwdec_drmprime;
 extern const struct ra_hwdec_driver ra_hwdec_drmprime_drm;
 
 const struct ra_hwdec_driver *const ra_hwdec_drivers[] = {
@@ -75,6 +76,7 @@ const struct ra_hwdec_driver *const ra_hwdec_drivers[] = {
 #endif
 #if HAVE_DRM
     &ra_hwdec_drmprime_drm,
+    &ra_hwdec_drmprime,
 #endif
 
     NULL
