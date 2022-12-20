@@ -5,14 +5,13 @@ export CFLAGS="$CFLAGS -isystem/usr/local/include"
 export CXXFLAGS="$CXXFLAGS -isystem/usr/local/include"
 export LDFLAGS="$LDFLAGS -L/usr/local/lib"
 
-meson build \
+meson setup build \
     -Dlibmpv=true \
     -Dlua=enabled \
     -Degl-drm=enabled \
     -Dopenal=enabled \
     -Dsdl2=enabled \
     -Dsndio=enabled \
-    -Dvaapi-wayland=enabled \
     -Dvdpau=enabled \
     -Dvulkan=enabled \
     -Doss-audio=enabled \
@@ -36,7 +35,6 @@ python3 ./waf configure \
     --enable-openal \
     --enable-sdl2 \
     --enable-sndio \
-    --enable-vaapi-wayland \
     --enable-vdpau \
     --enable-vulkan \
     --enable-oss-audio \

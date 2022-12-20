@@ -344,7 +344,9 @@ static int plane_data_from_imgfmt(struct pl_plane_data out_data[4],
     if ((desc.flags & MP_IMGFLAG_TYPE_FLOAT) && (desc.flags & MP_IMGFLAG_YUV))
         return 0; // Floating-point YUV (currently) unsupported
 
+    bool has_bits = false;
     bool any_padded = false;
+
     for (int p = 0; p < desc.num_planes; p++) {
         struct pl_plane_data *data = &out_data[p];
         struct mp_imgfmt_comp_desc sorted[MP_NUM_COMPONENTS];
@@ -390,8 +392,9 @@ static int plane_data_from_imgfmt(struct pl_plane_data out_data[4],
                 .bit_shift = MPMAX(sorted[c].pad, 0),
             };
 
-            if (p == 0 && c == 0) {
+            if (!has_bits) {
                 *out_bits = bits;
+                has_bits = true;
             } else {
                 if (!pl_bit_encoding_equal(out_bits, &bits)) {
                     // Bit encoding differs between components/planes,
@@ -979,6 +982,15 @@ static void draw_frame(struct vo *vo, struct vo_frame *frame)
                 image->num_overlays = 0;
                 fp->osd_sync = 0;
             }
+
+            // Update the frame signature to include the current OSD sync
+            // value, in order to disambiguate between identical frames with
+            // modified OSD. Shift the OSD sync value by a lot to avoid
+            // collisions with low signature values.
+            //
+            // This is safe to do because `pl_frame_mix.signature` lives in
+            // temporary memory that is only valid for this `pl_queue_update`.
+            ((uint64_t *) mix.signatures)[i] ^= fp->osd_sync << 48;
         }
     }
 
@@ -1060,7 +1072,6 @@ static void resize(struct vo *vo)
         osd_res_equals(p->osd_res, osd))
         return;
 
-    pl_renderer_flush_cache(p->rr);
     p->osd_sync++;
     p->osd_res = osd;
     p->src = src;
@@ -1241,7 +1252,6 @@ static int control(struct vo *vo, uint32_t request, void *data)
         return VO_TRUE;
 
     case VOCTRL_OSD_CHANGED:
-        pl_renderer_flush_cache(p->rr);
         p->osd_sync++;
         return VO_TRUE;
 
@@ -1682,6 +1692,62 @@ static void update_lut(struct priv *p, struct user_lut *lut)
     talloc_free(lutdata.start);
 }
 
+static void update_hook_opts(struct priv *p, char **opts, const char *shaderpath,
+                             const struct pl_hook *hook)
+{
+    if (!opts)
+        return;
+
+#if PL_API_VER >= 233
+    const char *basename = mp_basename(shaderpath);
+    struct bstr shadername;
+    if (!mp_splitext(basename, &shadername))
+        shadername = bstr0(basename);
+
+    for (int n = 0; opts[n * 2]; n++) {
+        struct bstr k = bstr0(opts[n * 2 + 0]);
+        struct bstr v = bstr0(opts[n * 2 + 1]);
+        int pos;
+        if ((pos = bstrchr(k, '/')) >= 0) {
+            if (!bstr_equals(bstr_splice(k, 0, pos), shadername))
+                continue;
+            k = bstr_cut(k, pos + 1);
+        }
+
+        for (int i = 0; i < hook->num_parameters; i++) {
+            const struct pl_hook_par *hp = &hook->parameters[i];
+            if (!bstr_equals0(k, hp->name) != 0)
+                continue;
+
+            m_option_t opt = {
+                .name = hp->name,
+            };
+
+            switch (hp->type) {
+            case PL_VAR_FLOAT:
+                opt.type = &m_option_type_float;
+                opt.min = hp->minimum.f;
+                opt.max = hp->maximum.f;
+                break;
+            case PL_VAR_SINT:
+                opt.type = &m_option_type_int;
+                opt.min = hp->minimum.i;
+                opt.max = hp->maximum.i;
+                break;
+            case PL_VAR_UINT:
+                opt.type = &m_option_type_int;
+                opt.min = MPMIN(hp->minimum.u, INT_MAX);
+                opt.max = MPMIN(hp->maximum.u, INT_MAX);
+                break;
+            }
+
+            opt.type->parse(p->log, &opt, k, v, hp->data);
+            break;
+        }
+    }
+#endif
+}
+
 static void update_render_options(struct vo *vo)
 {
     struct priv *p = vo->priv;
@@ -1698,6 +1764,7 @@ static void update_render_options(struct vo *vo)
     p->params.background_color[0] = opts->background.r / 255.0;
     p->params.background_color[1] = opts->background.g / 255.0;
     p->params.background_color[2] = opts->background.b / 255.0;
+    p->params.background_transparency = 1.0 - opts->background.a / 255.0;
     p->params.skip_anti_aliasing = !opts->correct_downscaling;
     p->params.disable_linear_scaling = !opts->linear_downscaling && !opts->linear_upscaling;
     p->params.disable_fbos = opts->dumb_mode == 1;
@@ -1807,8 +1874,10 @@ static void update_render_options(struct vo *vo)
 
     const struct pl_hook *hook;
     for (int i = 0; opts->user_shaders && opts->user_shaders[i]; i++) {
-        if ((hook = load_hook(p, opts->user_shaders[i])))
+        if ((hook = load_hook(p, opts->user_shaders[i]))) {
             MP_TARRAY_APPEND(p, p->hooks, p->params.num_hooks, hook);
+            update_hook_opts(p, opts->user_shader_opts, opts->user_shaders[i], hook);
+        }
     }
 
     p->params.hooks = p->hooks;

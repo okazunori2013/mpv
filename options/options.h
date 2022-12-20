@@ -27,6 +27,7 @@ typedef struct mp_vo_opts {
     char *fsscreen_name;
     char *winname;
     char *appid;
+    int content_type;
     int x11_netwm;
     int x11_bypass_compositor;
     int x11_present;
@@ -57,6 +58,7 @@ typedef struct mp_vo_opts {
 
     float force_monitor_aspect;
     float monitor_pixel_aspect;
+    int force_render;
     int force_window_position;
 
     char *mmcss_profile;

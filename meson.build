@@ -16,12 +16,12 @@ source_root = meson.project_source_root()
 python = find_program('python3')
 
 # ffmpeg
-libavcodec = dependency('libavcodec', version: '>= 58.12.100')
-libavfilter = dependency('libavfilter', version: '>= 7.14.100')
-libavformat = dependency('libavformat', version: '>= 58.9.100')
-libavutil = dependency('libavutil', version: '>= 56.12.100')
-libswresample = dependency('libswresample', version: '>= 3.0.100')
-libswscale = dependency('libswscale', version: '>= 5.0.101')
+libavcodec = dependency('libavcodec', version: '>= 58.134.100')
+libavfilter = dependency('libavfilter', version: '>= 7.110.100')
+libavformat = dependency('libavformat', version: '>= 58.76.100')
+libavutil = dependency('libavutil', version: '>= 56.70.100')
+libswresample = dependency('libswresample', version: '>= 3.9.100')
+libswscale = dependency('libswscale', version: '>= 5.9.100')
 
 libass = dependency('libass', version: '>= 0.12.2')
 pthreads = dependency('threads')
@@ -44,7 +44,6 @@ features = {
     'gpl': get_option('gpl'),
     'jpegxl': libavformat.version().version_compare('>= 59.27.100'),
     'libass': true,
-    'optimize': get_option('optimization') != '0',
     'threads': true,
 }
 
@@ -327,8 +326,8 @@ endif
 
 features += {'ta-leak-report': get_option('ta-leak-report')}
 
-libdl_dep = cc.find_library('libdl', required: false)
-features += {'libdl': libdl_dep.found() and cc.has_function('dlopen', dependencies: libdl_dep, prefix: '#include <dlfcn.h>')}
+libdl_dep = cc.find_library('dl', required: false)
+features += {'libdl': cc.has_function('dlopen', dependencies: libdl_dep, prefix: '#include <dlfcn.h>')}
 if features['libdl']
     dependencies += libdl_dep
 endif
@@ -632,7 +631,7 @@ if features['libarchive']
                      'stream/stream_libarchive.c')
 endif
 
-libavdevice = dependency('libavdevice', version: '>= 57.0.0', required: get_option('libavdevice'))
+libavdevice = dependency('libavdevice', version: '>= 58.13.100', required: get_option('libavdevice'))
 features += {'libavdevice': libavdevice.found()}
 if features['libavdevice']
     dependencies += libavdevice
@@ -717,10 +716,11 @@ if features['sdl2-gamepad']
     sources += files('input/sdl_gamepad.c')
 endif
 
-stdatomic = cc.find_library('atomic', required: get_option('stdatomic'))
-features += {'stdatomic': stdatomic.found()}
+stdatomic_dep = cc.find_library('atomic', required: false)
+features += {'stdatomic': cc.has_header_symbol('stdatomic.h', 'atomic_int', dependencies: stdatomic_dep,
+                                               required: get_option('stdatomic'))}
 if features['stdatomic']
-    dependencies += stdatomic
+    dependencies += stdatomic_dep
 endif
 
 uchardet_opt = get_option('uchardet').require(
@@ -831,7 +831,7 @@ if features['oss-audio']
     sources += files('audio/out/ao_oss.c')
 endif
 
-pipewire = dependency('libpipewire-0.3', version: '>= 0.3', required: get_option('pipewire'))
+pipewire = dependency('libpipewire-0.3', version: '>= 0.3.19', required: get_option('pipewire'))
 features += {'pipewire': pipewire.found()}
 if features['pipewire']
     dependencies += pipewire
@@ -1372,11 +1372,6 @@ if features['vaapi-wayland']
     dependencies += vaapi_wayland
 endif
 
-features += {'vaapi-wayland-memfd': features['vaapi-wayland'] and features['memfd_create']}
-if features['vaapi-wayland-memfd']
-    sources += files('video/out/vo_vaapi_wayland.c')
-endif
-
 vaapi_x11 = dependency('libva-x11', version: '>= 1.1.0', required: get_option('vaapi-x11'))
 features += {'vaapi-x11': features['vaapi'] and features['x11'] and vaapi_x11.found()}
 if features['vaapi-x11']
@@ -1402,6 +1397,15 @@ dmabuf_interop_pl = features['vaapi-libplacebo']
 features += {'dmabuf-interop-pl': dmabuf_interop_pl}
 if features['dmabuf-interop-pl']
     sources += files('video/out/hwdec/dmabuf_interop_pl.c')
+endif
+
+features += {'dmabuf-wayland' : features['wayland'] and features['memfd_create'] and (features['vaapi-wayland'] or features['drm'])}
+if features['dmabuf-wayland']
+    sources += files('video/out/vo_dmabuf_wayland.c')
+    sources += files('video/out/hwdec/dmabuf_interop_wl.c')
+    sources += files('video/out/wldmabuf/context_wldmabuf.c')
+    sources += files('video/out/wldmabuf/ra_wldmabuf.c')
+    sources += files('video/out/wlbuf_pool.c')
 endif
 
 vdpau_opt = get_option('vdpau').require(
@@ -1527,17 +1531,13 @@ if swift.allowed()
     subdir(join_paths('generated', 'osdep'))
 endif
 
-macos_touchbar = {
-    'name': 'macos-touchbar',
-    'deps': dependency('appleframeworks', modules: 'AppKit',
-                       required: get_option('macos-touchbar')),
-    'fragment': files(join_paths(fragments, 'touchbar.m')),
-}
-features += {'macos-touchbar': cc.compiles(macos_touchbar['fragment'], name: 'macos-touchbar check')}
+macos_touchbar = get_option('macos-touchbar').require(
+    cc.compiles(files(join_paths(fragments, 'touchbar.m')), name: 'macos-touchbar check') and features['cocoa'],
+    error_message: 'Either cocoa could not be found or the macos-touchbar check failed!',
+)
+features += {'macos-touchbar': macos_touchbar.allowed()}
 if features['macos-touchbar']
     sources += files('osdep/macosx_touchbar.m')
-elif get_option('macos-touchbar').enabled()
-    error('macos-touchbar enabled but it could not be found!')
 endif
 
 
@@ -1583,11 +1583,12 @@ if features['pdf-build']
 endif
 
 
-# We can't easily get every single thing a user might have passed on the cli,
-# but we might as well add prefix (even if it's not specifically set) since
-# it's highly relevant and useful.
-configuration = 'meson build '
-configuration += '-Dprefix=' + get_option('prefix')
+# Currently, we can't easily get every single thing a user might have passed
+# on the cli, but we might as well just hardcode a few options (even if they are
+# not specifically set) for verbosity's sake.
+configuration = 'meson configure build ' + '-Dprefix=' + get_option('prefix') + \
+                ' -Dbuildtype=' + get_option('buildtype') + \
+                ' -Doptimization=' + get_option('optimization')
 
 features += {'cplayer': get_option('cplayer')}
 features += {'libmpv-' + get_option('default_library'): get_option('libmpv')}
@@ -1624,7 +1625,7 @@ sys.stdout.write(features)
 '''
 feature_str = run_command(python, '-c', feature_sort, feature_keys, check: true).stdout()
 conf_data.set_quoted('FULLCONFIG', feature_str)
-conf_data.set_quoted('MPV_CONFDIR', join_paths(get_option('sysconfdir'), 'mpv'))
+conf_data.set_quoted('MPV_CONFDIR', join_paths(get_option('prefix'), get_option('sysconfdir'), 'mpv'))
 configure_file(output : 'config.h', configuration : conf_data)
 message('List of enabled features: ' + feature_str)
 

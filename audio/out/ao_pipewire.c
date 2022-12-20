@@ -24,6 +24,7 @@
 #include <pipewire/global.h>
 #include <spa/param/audio/format-utils.h>
 #include <spa/param/props.h>
+#include <spa/utils/result.h>
 #include <math.h>
 
 #include "common/msg.h"
@@ -42,6 +43,12 @@
 #define PW_KEY_NODE_RATE "node.rate"
 #endif
 
+// Added in Pipewire 0.3.44
+// remove the fallback when we require a newer version
+#ifndef PW_KEY_TARGET_OBJECT
+#define PW_KEY_TARGET_OBJECT "target.object"
+#endif
+
 #if !PW_CHECK_VERSION(0, 3, 50)
 static inline int pw_stream_get_time_n(struct pw_stream *stream, struct pw_time *time, size_t size) {
 	return pw_stream_get_time(stream, time);
@@ -53,6 +60,7 @@ struct priv {
     struct pw_stream *stream;
     struct pw_core *core;
     struct spa_hook stream_listener;
+    struct spa_hook core_listener;
 
     bool muted;
     float volume[2];
@@ -175,6 +183,8 @@ static void on_process(void *userdata)
     }
 
     pw_stream_queue_buffer(p->stream, b);
+
+    MP_TRACE(ao, "queued %d of %d samples\n", samples, nframes);
 }
 
 static void on_param_changed(void *userdata, uint32_t id, const struct spa_pod *param)
@@ -213,6 +223,11 @@ static void on_state_changed(void *userdata, enum pw_stream_state old, enum pw_s
 
     if (state == PW_STREAM_STATE_ERROR) {
         MP_WARN(ao, "Stream in error state, trying to reload...\n");
+        ao_request_reload(ao);
+    }
+
+    if (state == PW_STREAM_STATE_UNCONNECTED && old != PW_STREAM_STATE_UNCONNECTED) {
+        MP_WARN(ao, "Stream disconnected, trying to reload...\n");
         ao_request_reload(ao);
     }
 }
@@ -272,6 +287,8 @@ static void uninit(struct ao *ao)
     struct priv *p = ao->priv;
     if (p->loop)
         pw_thread_loop_stop(p->loop);
+    spa_hook_remove(&p->stream_listener);
+    spa_zero(p->stream_listener);
     if (p->stream)
         pw_stream_destroy(p->stream);
     p->stream = NULL;
@@ -384,14 +401,54 @@ unlock_loop:
     return ret;
 }
 
+static void have_sink(struct ao *ao, uint32_t id, const struct spa_dict *props, void *ctx)
+{
+    bool *b = ctx;
+    *b = true;
+}
+
+static bool session_has_sinks(struct ao *ao)
+{
+    bool b = false;
+
+    if (for_each_sink(ao, have_sink, &b) < 0)
+        MP_WARN(ao, "Could not list devices, sink detection may be wrong\n");
+
+    return b;
+}
+
+static void on_error(void *data, uint32_t id, int seq, int res, const char *message)
+{
+    struct ao *ao = data;
+
+    MP_WARN(ao, "Error during playback: %s, %s\n", spa_strerror(res), message);
+}
+
+static void on_core_info(void *data, const struct pw_core_info *info)
+{
+    struct ao *ao = data;
+
+    MP_VERBOSE(ao, "Core user: %s\n", info->user_name);
+    MP_VERBOSE(ao, "Core host: %s\n", info->host_name);
+    MP_VERBOSE(ao, "Core version: %s\n", info->version);
+    MP_VERBOSE(ao, "Core name: %s\n", info->name);
+}
+
+static const struct pw_core_events core_events = {
+    .version = PW_VERSION_CORE_EVENTS,
+    .error = on_error,
+    .info = on_core_info,
+};
+
 static int pipewire_init_boilerplate(struct ao *ao)
 {
     struct priv *p = ao->priv;
     struct pw_context *context;
-    int ret;
 
     pw_init(NULL, NULL);
 
+    MP_VERBOSE(ao, "Headers version: %s\n", pw_get_headers_version());
+    MP_VERBOSE(ao, "Library version: %s\n", pw_get_library_version());
 
     p->loop = pw_thread_loop_new("ao-pipewire", NULL);
     if (p->loop == NULL)
@@ -413,18 +470,25 @@ static int pipewire_init_boilerplate(struct ao *ao)
     if (!p->core) {
         MP_WARN(ao, "Could not connect to context '%s': %s\n",
                 p->options.remote, strerror(errno));
+        pw_context_destroy(context);
         goto error;
     }
 
-    ret = 0;
+    if (pw_core_add_listener(p->core, &p->core_listener, &core_events, ao) < 0)
+        goto error;
 
-out:
     pw_thread_loop_unlock(p->loop);
-    return ret;
+
+    if (!session_has_sinks(ao)) {
+        MP_VERBOSE(ao, "PipeWire does not have any audio sinks, skipping\n");
+        return -1;
+    }
+
+    return 0;
 
 error:
-    ret = -1;
-    goto out;
+    pw_thread_loop_unlock(p->loop);
+    return -1;
 }
 
 
@@ -448,7 +512,7 @@ static int init(struct ao *ao)
     );
 
     if (pipewire_init_boilerplate(ao) < 0)
-        goto error;
+        goto error_props;
 
     ao->device_buffer = p->options.buffer_msec * ao->samplerate / 1000;
 
@@ -472,7 +536,7 @@ static int init(struct ao *ao)
 
     params[0] = spa_format_audio_raw_build(&b, SPA_PARAM_EnumFormat, &audio_info);
     if (!params[0])
-        goto error;
+        goto error_props;
 
     if (af_fmt_is_planar(ao->format)) {
         ao->num_planes = ao->channels.num;
@@ -512,6 +576,8 @@ static int init(struct ao *ao)
 
     return 0;
 
+error_props:
+    pw_properties_free(props);
 error:
     uninit(ao);
     return -1;
@@ -688,7 +754,7 @@ static int hotplug_init(struct ao *ao)
 
     int res = pipewire_init_boilerplate(ao);
     if (res)
-        return res;
+        goto error_no_unlock;
 
     pw_thread_loop_lock(priv->loop);
 
@@ -711,6 +777,7 @@ static int hotplug_init(struct ao *ao)
 
 error:
     pw_thread_loop_unlock(priv->loop);
+error_no_unlock:
     uninit(ao);
     return -1;
 }

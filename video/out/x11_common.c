@@ -1439,8 +1439,8 @@ static void vo_x11_update_window_title(struct vo *vo)
     /* _NET_WM_NAME and _NET_WM_ICON_NAME must be sanitized to UTF-8. */
     void *tmp = talloc_new(NULL);
     struct bstr b_title = bstr_sanitize_utf8_latin1(tmp, bstr0(x11->window_title));
-    vo_x11_set_property_utf8(vo, XA(x11, _NET_WM_NAME), b_title.start);
-    vo_x11_set_property_utf8(vo, XA(x11, _NET_WM_ICON_NAME), b_title.start);
+    vo_x11_set_property_utf8(vo, XA(x11, _NET_WM_NAME), bstrto0(tmp, b_title));
+    vo_x11_set_property_utf8(vo, XA(x11, _NET_WM_ICON_NAME), bstrto0(tmp, b_title));
     talloc_free(tmp);
 }
 
@@ -1977,7 +1977,8 @@ bool vo_x11_check_visible(struct vo *vo) {
     struct vo_x11_state *x11 = vo->x11;
     struct mp_vo_opts *opts = x11->opts;
 
-    bool render = !x11->hidden || VS_IS_DISP(opts->video_sync);
+    bool render = !x11->hidden || opts->force_render ||
+                  VS_IS_DISP(opts->video_sync);
     return render;
 }
 
@@ -2120,6 +2121,12 @@ int vo_x11_control(struct vo *vo, int *events, int request, void *arg)
             return VO_NOTAVAIL;
         ((int *)arg)[0] = selected_disp->rc.x1 - selected_disp->rc.x0;
         ((int *)arg)[1] = selected_disp->rc.y1 - selected_disp->rc.y0;
+        return VO_TRUE;
+    }
+    case VOCTRL_GET_WINDOW_ID: {
+        if (!x11->window)
+            return VO_NOTAVAIL;
+        *(int64_t *)arg = x11->window;
         return VO_TRUE;
     }
     case VOCTRL_GET_HIDPI_SCALE:

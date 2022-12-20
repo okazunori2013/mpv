@@ -24,6 +24,7 @@
 
 struct wayland_opts {
     int configure_bounds;
+    int content_type;
     int disable_vsync;
     int edge_pixels_pointer;
     int edge_pixels_touch;
@@ -77,12 +78,23 @@ struct vo_wayland_state {
     int timeout_count;
     int wakeup_pipe[2];
 
+    /* content-type */
+    /* TODO: unvoid these if required wayland protocols is bumped to 1.27+ */
+    void *content_type_manager;
+    void *content_type;
+    int current_content_type;
+
     /* idle-inhibit */
     struct zwp_idle_inhibit_manager_v1 *idle_inhibit_manager;
     struct zwp_idle_inhibitor_v1 *idle_inhibitor;
 
     /* linux-dmabuf */
     struct zwp_linux_dmabuf_v1 *dmabuf;
+    /* TODO: unvoid this if required wayland protocols is bumped to 1.24+ */
+    void *dmabuf_feedback;
+    void *format_map;
+    uint32_t format_size;
+    /* TODO: remove these once zwp_linux_dmabuf_v1 version 2 support is removed. */
     int *drm_formats;
     int drm_format_ct;
     int drm_format_ct_max;
@@ -93,6 +105,10 @@ struct vo_wayland_state {
     struct mp_present *present;
     int64_t refresh_interval;
     bool use_present;
+
+    /* single-pixel-buffer */
+    /* TODO: unvoid this if required wayland-protocols is bumped to 1.27+ */
+    void *single_pixel_manager;
 
     /* xdg-decoration */
     struct zxdg_decoration_manager_v1 *xdg_decoration_manager;
@@ -138,7 +154,7 @@ struct vo_wayland_state {
 };
 
 bool vo_wayland_check_visible(struct vo *vo);
-bool vo_wayland_supported_format(struct vo *vo, uint32_t format);
+bool vo_wayland_supported_format(struct vo *vo, uint32_t format, uint64_t modifier);
 
 int vo_wayland_allocate_memfd(struct vo *vo, size_t size);
 int vo_wayland_control(struct vo *vo, int *events, int request, void *arg);

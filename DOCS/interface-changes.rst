@@ -26,6 +26,10 @@ Interface changes
 
 ::
 
+ --- mpv 0.36.0 ---
+    - add `--force-render`
+    - add `--wayland-content-type`
+    - deprecate `--drm-atomic`
  --- mpv 0.35.0 ---
     - add the `--vo=gpu-next` video output driver, as well as the options
       `--allow-delayed-peak-detect`, `--builtin-scalers`,
@@ -41,7 +45,7 @@ Interface changes
     - add `dolbyvision` sub-parameter to `format` video filter
     - `--sub-visibility` no longer has any effect on secondary subtitles
     - add `film-grain` sub-parameter to `format` video filter
-    - add experimental `--vo=vaapi-wayland` video output driver
+    - add experimental `--vo=dmabuf-wayland` video output driver
     - add `--x11-present` for controlling whether to use xorg's present extension
     - add `engine` option to the `rubberband` audio filter to support the new
       engine introduced in rubberband 3.0.0. Defaults to `finer` (new engine).
@@ -49,6 +53,7 @@ Interface changes
     - deprecate `--gamma-factor`
     - deprecate `--gamma-auto`
     - remove `--vulkan-disable-events`
+    - add `--glsl-shader-opts`
  --- mpv 0.34.0 ---
     - deprecate selecting by card number with `--drm-connector`, add
       `--drm-device` which can be used instead

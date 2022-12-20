@@ -286,12 +286,13 @@ Available video output drivers are:
     ``--sdl-switch-mode``
         Instruct SDL to switch the monitor video mode when going fullscreen.
 
-``vaapi-wayland``
-    Experimental Wayland output driver designed for use with VA API hardware decoding.
-    The driver is designed to avoid any GPU to CPU copies, and to perform scaling and
-    color space conversion using fixed-function hardware, if available,
-    rather than GPU shaders. This frees up GPU resources for other tasks.
-    Currently this driver is experimental and only works with the ``--hwdec=vaapi`` driver;
+``dmabuf-wayland``
+    Experimental Wayland output driver designed for use with either drm stateless
+    or VA API hardware decoding. The driver is designed to avoid any GPU to CPU copies,
+    and to perform scaling and color space conversion using fixed-function hardware,
+    if available, rather than GPU shaders. This frees up GPU resources for other tasks.
+    Currently this driver is experimental and only works with the ``--hwdec=vaapi``
+    or ``hwdec=drm`` drivers;
     OSD is also not supported. Supported compositors : Weston and Sway.
 
 ``vaapi``
@@ -431,6 +432,9 @@ Available video output drivers are:
         of pixels is rounded down to a multiple of number of cells (per axis),
         to take into account padding at the report - this only works correctly
         when the overall padding per axis is smaller than the number of cells.
+
+    ``--vo-sixel-draw-clear=<yes|no>`` (default: yes)
+￼        Whether or not to clear the terminal while drawing frames.
 
     ``--vo-sixel-exit-clear=<yes|no>`` (default: yes)
         Whether or not to clear the terminal on quit. When set to no - the last
@@ -596,16 +600,6 @@ Available video output drivers are:
         Use ``--drm-mode=help`` to get a list of available modes for all active
         connectors.
 
-    ``--drm-atomic=<no|auto>``
-        Toggle use of atomic modesetting. Mostly useful for debugging.
-
-        :no:    Use legacy modesetting.
-        :auto:  Use atomic modesetting, falling back to legacy modesetting if
-                not available. (default)
-
-        Note: Only affects ``gpu-context=drm``. ``vo=drm`` supports legacy
-        modesetting only.
-
     ``--drm-draw-plane=<primary|overlay|N>``
         Select the DRM plane to which video and OSD is drawn to, under normal
         circumstances. The plane can be specified as ``primary``, which will
@@ -652,7 +646,6 @@ Available video output drivers are:
         just cause the video to get rendered at a different resolution and then
         scaled to screen size.
 
-        Note: this option is only available with DRM atomic support.
         (default: display resolution)
 
     ``--drm-vrr-enabled=<no|yes|auto>``

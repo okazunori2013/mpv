@@ -1249,7 +1249,7 @@ Video
     :videotoolbox: requires ``--vo=gpu`` (macOS 10.8 and up),
                    or ``--vo=libmpv`` (iOS 9.0 and up)
     :videotoolbox-copy: copies video back into system RAM (macOS 10.8 or iOS 9.0 and up)
-    :vaapi:     requires ``--vo=gpu``, ``--vo=vaapi`` or ``--vo=vaapi-wayland`` (Linux only)
+    :vaapi:     requires ``--vo=gpu``, ``--vo=vaapi`` or ``--vo=dmabuf-wayland`` (Linux only)
     :vaapi-copy: copies video back into system RAM (Linux with some GPUs only)
     :nvdec:     requires ``--vo=gpu`` (Any platform CUDA is available)
     :nvdec-copy: copies video back to system RAM (Any platform CUDA is available)
@@ -3242,6 +3242,12 @@ Window
     ``vdpau``, ``direct3d``), this can be slightly faster or slower,
     depending on GPU drivers and hardware. For other VOs, this just makes
     rendering slower.
+
+``--force-render``
+    Forces mpv to always render frames regardless of the visibility of the
+    window. Currently only affects X11 and Wayland VOs since they are the
+    only ones that have this optimization (i.e. everything else always renders
+    regardless of visibility).
 
 ``--force-window-position``
     Forcefully move mpv's video output window to default location whenever
@@ -5588,6 +5594,12 @@ them.
     it first renders. This option will take precedence over any ``autofit`` or
     ``geometry`` type settings if the configure bounds are used.
 
+``--wayland-content-type=<auto|none|photo|video|game>``
+    If supported by the compositor, mpv will send a hint using the content-type
+    protocol telling the compositor what type of content is being displayed. ``auto``
+    (default) will automatically switch between telling the compositor the content
+    is a photo, video or possibly none depending on internal heuristics.
+
 ``--wayland-disable-vsync=<yes|no>``
     Disable mpv's internal vsync for Wayland-based video output (default: no).
     This is mainly useful for benchmarking wayland VOs when combined with
@@ -5863,6 +5875,13 @@ them.
 
 ``--glsl-shader=<file>``
     CLI/config file only alias for ``--glsl-shaders-append``.
+
+``--glsl-shader-opts=param1=value1,param2=value2,...``
+    Specifies the options to use for tunable shader parameters. You can target
+    specific named shaders by prefixing the shader name with a ``/``, e.g.
+    ``shader/param=value``. Without a prefix, parameters affect all shaders.
+    The shader name is the base part of the shader filename, without the
+    extension. (``--vo=gpu-next`` only)
 
 ``--deband``
     Enable the debanding algorithm. This greatly reduces the amount of visible

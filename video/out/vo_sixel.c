@@ -35,41 +35,40 @@
 #include "video/sws_utils.h"
 #include "video/mp_image.h"
 
+#if HAVE_POSIX
+#include <unistd.h>
+#endif
+
 #define IMGFMT IMGFMT_RGB24
+
+#define TERM_ESC_USE_GLOBAL_COLOR_REG   "\033[?1070l"
 
 #define TERMINAL_FALLBACK_COLS      80
 #define TERMINAL_FALLBACK_ROWS      25
 #define TERMINAL_FALLBACK_PX_WIDTH  320
 #define TERMINAL_FALLBACK_PX_HEIGHT 240
 
-#define ESC_HIDE_CURSOR             "\033[?25l"
-#define ESC_RESTORE_CURSOR          "\033[?25h"
-#define ESC_CLEAR_SCREEN            "\033[2J"
-#define ESC_GOTOXY                  "\033[%d;%df"
-#define ESC_USE_GLOBAL_COLOR_REG    "\033[?1070l"
+struct vo_sixel_opts {
+    int diffuse;
+    int reqcolors;
+    int fixedpal;
+    int threshold;
+    int width, height, top, left;
+    int pad_y, pad_x;
+    int rows, cols;
+    int draw_clear, exit_clear;
+};
 
 struct priv {
-
     // User specified options
-    int opt_diffuse;
-    int opt_width;
-    int opt_height;
-    int opt_reqcolors;
-    int opt_fixedpal;
-    int opt_threshold;
-    int opt_top;
-    int opt_left;
-    int opt_pad_y;
-    int opt_pad_x;
-    int opt_rows;
-    int opt_cols;
-    int opt_clear;
+    struct vo_sixel_opts opts;
 
     // Internal data
     sixel_output_t *output;
     sixel_dither_t *dither;
     sixel_dither_t *testdither;
     uint8_t        *buffer;
+    char           *sixel_output_buf;
     bool            skip_frame_draw;
 
     int left, top;  // image origin cell (1 based)
@@ -95,7 +94,7 @@ static int detect_scene_change(struct vo* vo)
     int histgram_colors = 0;
 
     // If threshold is set negative, then every frame must be a scene change
-    if (priv->dither == NULL || priv->opt_threshold < 0)
+    if (priv->dither == NULL || priv->opts.threshold < 0)
         return 1;
 
     histgram_colors = sixel_dither_get_num_of_histogram_colors(priv->testdither);
@@ -105,7 +104,7 @@ static int detect_scene_change(struct vo* vo)
                               color_difference_count : -color_difference_count;
 
     if (100 * color_difference_count >
-        priv->opt_threshold * previous_histgram_colors)
+        priv->opts.threshold * previous_histgram_colors)
     {
         priv->previous_histgram_colors = histgram_colors; // update history
         return 1;
@@ -149,7 +148,7 @@ static SIXELSTATUS prepare_static_palette(struct vo* vo)
         if (priv->dither == NULL)
             return SIXEL_FALSE;
 
-        sixel_dither_set_diffusion_type(priv->dither, priv->opt_diffuse);
+        sixel_dither_set_diffusion_type(priv->dither, priv->opts.diffuse);
     }
 
     sixel_dither_set_body_only(priv->dither, 0);
@@ -178,12 +177,12 @@ static SIXELSTATUS prepare_dynamic_palette(struct vo *vo)
         }
 
         priv->dither = priv->testdither;
-        status = sixel_dither_new(&priv->testdither, priv->opt_reqcolors, NULL);
+        status = sixel_dither_new(&priv->testdither, priv->opts.reqcolors, NULL);
 
         if (SIXEL_FAILED(status))
             return status;
 
-        sixel_dither_set_diffusion_type(priv->dither, priv->opt_diffuse);
+        sixel_dither_set_diffusion_type(priv->dither, priv->opts.diffuse);
     } else {
         if (priv->dither == NULL)
             return SIXEL_FALSE;
@@ -206,8 +205,8 @@ static void update_canvas_dimensions(struct vo *vo)
     terminal_get_size2(&num_rows, &num_cols, &total_px_width, &total_px_height);
 
     // If the user has specified rows/cols use them for further calculations
-    num_rows = (priv->opt_rows > 0) ? priv->opt_rows : num_rows;
-    num_cols = (priv->opt_cols > 0) ? priv->opt_cols : num_cols;
+    num_rows = (priv->opts.rows > 0) ? priv->opts.rows : num_rows;
+    num_cols = (priv->opts.cols > 0) ? priv->opts.cols : num_cols;
 
     // If the pad value is set in between 0 and width/2 - 1, then we
     // subtract from the detected width. Otherwise, we assume that the width
@@ -215,17 +214,17 @@ static void update_canvas_dimensions(struct vo *vo)
     // total_width to be an integer multiple of num_cols. So in case the padding
     // added by terminal is less than the number of cells in that axis, then rounding
     // down will take care of correcting the detected width and remove padding.
-    if (priv->opt_width > 0) {
+    if (priv->opts.width > 0) {
         // option - set by the user, hard truth
-        total_px_width = priv->opt_width;
+        total_px_width = priv->opts.width;
     } else {
         if (total_px_width <= 0) {
                 // ioctl failed to read terminal width
                 total_px_width = TERMINAL_FALLBACK_PX_WIDTH;
         } else {
-            if (priv->opt_pad_x >= 0 && priv->opt_pad_x < total_px_width / 2) {
+            if (priv->opts.pad_x >= 0 && priv->opts.pad_x < total_px_width / 2) {
                 // explicit padding set by the user
-                total_px_width -= (2 * priv->opt_pad_x);
+                total_px_width -= (2 * priv->opts.pad_x);
             } else {
                 // rounded "auto padding"
                 total_px_width = total_px_width / num_cols * num_cols;
@@ -233,14 +232,14 @@ static void update_canvas_dimensions(struct vo *vo)
         }
     }
 
-    if (priv->opt_height > 0) {
-        total_px_height = priv->opt_height;
+    if (priv->opts.height > 0) {
+        total_px_height = priv->opts.height;
     } else {
         if (total_px_height <= 0) {
             total_px_height = TERMINAL_FALLBACK_PX_HEIGHT;
         } else {
-            if (priv->opt_pad_y >= 0 && priv->opt_pad_y < total_px_height / 2) {
-                total_px_height -= (2 * priv->opt_pad_y);
+            if (priv->opts.pad_y >= 0 && priv->opts.pad_y < total_px_height / 2) {
+                total_px_height -= (2 * priv->opts.pad_y);
             } else {
                 total_px_height = total_px_height / num_rows * num_rows;
             }
@@ -279,9 +278,9 @@ static void set_sixel_output_parameters(struct vo *vo)
 
     // top/left values must be greater than 1. If it is set, then
     // the image will be rendered from there and no further centering is done.
-    priv->top  = (priv->opt_top  > 0) ?  priv->opt_top :
+    priv->top  = (priv->opts.top  > 0) ?  priv->opts.top :
                   priv->num_rows * priv->dst_rect.y0 / vo->dheight + 1;
-    priv->left = (priv->opt_left > 0) ?  priv->opt_left :
+    priv->left = (priv->opts.left > 0) ?  priv->opts.left :
                   priv->num_cols * priv->dst_rect.x0 / vo->dwidth  + 1;
 }
 
@@ -310,9 +309,9 @@ static int update_sixel_swscaler(struct vo *vo, struct mp_image_params *params)
         return -1;
 
     // create testdither only if dynamic palette mode is set
-    if (!priv->opt_fixedpal) {
+    if (!priv->opts.fixedpal) {
         SIXELSTATUS status = sixel_dither_new(&priv->testdither,
-                                              priv->opt_reqcolors, NULL);
+                                              priv->opts.reqcolors, NULL);
         if (SIXEL_FAILED(status)) {
             MP_ERR(vo, "update_sixel_swscaler: Failed to create new dither: %s\n",
                    sixel_helper_format_error(status));
@@ -326,6 +325,32 @@ static int update_sixel_swscaler(struct vo *vo, struct mp_image_params *params)
     return 0;
 }
 
+static inline int sixel_buffer(char *data, int size, void *priv) {
+    char **out = (char **)priv;
+    *out = talloc_strndup_append_buffer(*out, data, size);
+    return size;
+}
+
+static inline int sixel_write(char *data, int size)
+{
+    // On POSIX platforms, write() is the fastest method. It also is the only
+    // one that—if implemented correctly—ensures atomic writes so mpv’s
+    // output will not be interrupted by other processes or threads that write
+    // to stdout, which would cause screen corruption.
+#if HAVE_POSIX
+    return write(fileno(stdout), data, size);
+#else
+    int ret = fwrite(data, 1, size, stdout);
+    fflush(stdout);
+    return ret;
+#endif
+}
+
+static inline void sixel_strwrite(char *s)
+{
+    sixel_write(s, strlen(s));
+}
+
 static int reconfig(struct vo *vo, struct mp_image_params *params)
 {
     struct priv *priv = vo->priv;
@@ -336,7 +361,8 @@ static int reconfig(struct vo *vo, struct mp_image_params *params)
         ret = update_sixel_swscaler(vo, params);
     }
 
-    printf(ESC_CLEAR_SCREEN);
+    if (priv->opts.draw_clear)
+        sixel_strwrite(TERM_ESC_CLEAR_SCREEN);
     vo->want_redraw = true;
 
     return ret;
@@ -365,7 +391,8 @@ static void draw_frame(struct vo *vo, struct vo_frame *frame)
         // with a failed reconfig.
         update_sixel_swscaler(vo, vo->params);
 
-        printf(ESC_CLEAR_SCREEN);
+        if (priv->opts.draw_clear)
+            sixel_strwrite(TERM_ESC_CLEAR_SCREEN);
         resized = true;
     }
 
@@ -407,7 +434,7 @@ static void draw_frame(struct vo *vo, struct vo_frame *frame)
     // they should try to re-initialize the dithers, so it shouldn't dereference
     // any NULL pointers. flip_page also has a check to make sure dither is not
     // NULL before drawing, so failure in these functions should still be okay.
-    if (priv->opt_fixedpal) {
+    if (priv->opts.fixedpal) {
         status = prepare_static_palette(vo);
     } else {
         status = prepare_dynamic_palette(vo);
@@ -420,11 +447,6 @@ static void draw_frame(struct vo *vo, struct vo_frame *frame)
 
     if (mpi)
         talloc_free(mpi);
-}
-
-static int sixel_write(char *data, int size, void *priv)
-{
-    return fwrite(data, 1, size, (FILE *)priv);
 }
 
 static void flip_page(struct vo *vo)
@@ -442,24 +464,26 @@ static void flip_page(struct vo *vo)
         return;
 
     // Go to the offset row and column, then display the image
-    printf(ESC_GOTOXY, priv->top, priv->left);
+    priv->sixel_output_buf = talloc_asprintf(NULL, TERM_ESC_GOTO_YX,
+                                             priv->top, priv->left);
     sixel_encode(priv->buffer, priv->width, priv->height,
                  depth, priv->dither, priv->output);
-    fflush(stdout);
+    sixel_write(priv->sixel_output_buf, ta_get_size(priv->sixel_output_buf));
+
+    talloc_free(priv->sixel_output_buf);
 }
 
 static int preinit(struct vo *vo)
 {
     struct priv *priv = vo->priv;
     SIXELSTATUS status = SIXEL_FALSE;
-    FILE* sixel_output_file = stdout;
 
     // Parse opts set by CLI or conf
     priv->sws = mp_sws_alloc(vo);
     priv->sws->log = vo->log;
     mp_sws_enable_cmdline_opts(priv->sws, vo->global);
 
-    status = sixel_output_new(&priv->output, sixel_write, sixel_output_file, NULL);
+    status = sixel_output_new(&priv->output, sixel_buffer, &priv->sixel_output_buf, NULL);
     if (SIXEL_FAILED(status)) {
         MP_ERR(vo, "preinit: Failed to create output file: %s\n",
                sixel_helper_format_error(status));
@@ -468,16 +492,19 @@ static int preinit(struct vo *vo)
 
     sixel_output_set_encode_policy(priv->output, SIXEL_ENCODEPOLICY_FAST);
 
-    printf(ESC_HIDE_CURSOR);
+    if (priv->opts.exit_clear)
+        sixel_strwrite(TERM_ESC_SAVE_SCREEN);
+
+    sixel_strwrite(TERM_ESC_HIDE_CURSOR);
 
     /* don't use private color registers for each frame. */
-    printf(ESC_USE_GLOBAL_COLOR_REG);
+    sixel_strwrite(TERM_ESC_USE_GLOBAL_COLOR_REG);
 
     priv->dither = NULL;
 
     // create testdither only if dynamic palette mode is set
-    if (!priv->opt_fixedpal) {
-        status = sixel_dither_new(&priv->testdither, priv->opt_reqcolors, NULL);
+    if (!priv->opts.fixedpal) {
+        status = sixel_dither_new(&priv->testdither, priv->opts.reqcolors, NULL);
         if (SIXEL_FAILED(status)) {
             MP_ERR(vo, "preinit: Failed to create new dither: %s\n",
                    sixel_helper_format_error(status));
@@ -507,12 +534,10 @@ static void uninit(struct vo *vo)
 {
     struct priv *priv = vo->priv;
 
-    printf(ESC_RESTORE_CURSOR);
+    sixel_strwrite(TERM_ESC_RESTORE_CURSOR);
 
-    if (priv->opt_clear) {
-        printf(ESC_CLEAR_SCREEN);
-        printf(ESC_GOTOXY, 1, 1);
-    }
+    if (priv->opts.exit_clear)
+        sixel_strwrite(TERM_ESC_RESTORE_SCREEN);
     fflush(stdout);
 
     if (priv->output) {
@@ -537,22 +562,23 @@ const struct vo_driver video_out_sixel = {
     .uninit = uninit,
     .priv_size = sizeof(struct priv),
     .priv_defaults = &(const struct priv) {
-        .opt_diffuse = DIFFUSE_AUTO,
-        .opt_width = 0,
-        .opt_height = 0,
-        .opt_reqcolors = 256,
-        .opt_threshold = -1,
-        .opt_fixedpal = 1,
-        .opt_top = 0,
-        .opt_left = 0,
-        .opt_pad_y = -1,
-        .opt_pad_x = -1,
-        .opt_rows = 0,
-        .opt_cols = 0,
-        .opt_clear = 1,
+        .opts.diffuse = DIFFUSE_AUTO,
+        .opts.width = 0,
+        .opts.height = 0,
+        .opts.reqcolors = 256,
+        .opts.threshold = -1,
+        .opts.fixedpal = 1,
+        .opts.top = 0,
+        .opts.left = 0,
+        .opts.pad_y = -1,
+        .opts.pad_x = -1,
+        .opts.rows = 0,
+        .opts.cols = 0,
+        .opts.draw_clear = 1,
+        .opts.exit_clear = 1,
     },
     .options = (const m_option_t[]) {
-        {"dither", OPT_CHOICE(opt_diffuse,
+        {"dither", OPT_CHOICE(opts.diffuse,
             {"auto", DIFFUSE_AUTO},
             {"none", DIFFUSE_NONE},
             {"atkinson", DIFFUSE_ATKINSON},
@@ -562,18 +588,19 @@ const struct vo_driver video_out_sixel = {
             {"burkes", DIFFUSE_BURKES},
             {"arithmetic", DIFFUSE_A_DITHER},
             {"xor", DIFFUSE_X_DITHER})},
-        {"width", OPT_INT(opt_width)},
-        {"height", OPT_INT(opt_height)},
-        {"reqcolors", OPT_INT(opt_reqcolors)},
-        {"fixedpalette", OPT_FLAG(opt_fixedpal)},
-        {"threshold", OPT_INT(opt_threshold)},
-        {"top", OPT_INT(opt_top)},
-        {"left", OPT_INT(opt_left)},
-        {"pad-y", OPT_INT(opt_pad_y)},
-        {"pad-x", OPT_INT(opt_pad_x)},
-        {"rows", OPT_INT(opt_rows)},
-        {"cols", OPT_INT(opt_cols)},
-        {"exit-clear", OPT_FLAG(opt_clear), },
+        {"width", OPT_INT(opts.width)},
+        {"height", OPT_INT(opts.height)},
+        {"reqcolors", OPT_INT(opts.reqcolors)},
+        {"fixedpalette", OPT_FLAG(opts.fixedpal)},
+        {"threshold", OPT_INT(opts.threshold)},
+        {"top", OPT_INT(opts.top)},
+        {"left", OPT_INT(opts.left)},
+        {"pad-y", OPT_INT(opts.pad_y)},
+        {"pad-x", OPT_INT(opts.pad_x)},
+        {"rows", OPT_INT(opts.rows)},
+        {"cols", OPT_INT(opts.cols)},
+        {"draw-clear", OPT_FLAG(opts.draw_clear), },
+        {"exit-clear", OPT_FLAG(opts.exit_clear), },
         {0}
     },
     .options_prefix = "vo-sixel",
